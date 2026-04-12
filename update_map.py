@@ -1,8 +1,8 @@
 import pandas as pd
 import folium
 import requests
+import xml.etree.ElementTree as ET
 
-# 1. טעינת האקסל שלך
 def load_excel_smart(filename):
     try:
         df = pd.read_excel(filename, header=None)
@@ -19,53 +19,53 @@ def load_excel_smart(filename):
         print(f"Excel error: {e}")
         return None
 
+# 1. טעינת אקסל
 df_meta = load_excel_smart('stations_metadata.xlsx')
 
-# 2. משיכת נתונים ממקור ה-JSON המהיר (כמו במזגל)
-# המקור הזה מעדכן נתונים רגעיים ללא השהיה
-url = "https://ims.gov.il/sites/default/files/ims_data/map_data/map_data-he.json"
+# 2. משיכת נתונים מכתובת ה-XML הכי אמינה ופתוחה
+url = "https://ims.gov.il/sites/default/files/ims_data/xml_files/imslasthour.xml"
 
 try:
-    response = requests.get(url, timeout=15)
-    data = response.json()
-    # הנתונים נמצאים תחת המפתח 'stns'
-    stations_data = data.get('stns', [])
-    print(f"Fetched {len(stations_data)} stations from JSON.")
+    # אנחנו משתמשים ב-Session כדי לשמור על חיבור יציב
+    session = requests.Session()
+    session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
+    response = session.get(url, timeout=20)
+    root = ET.fromstring(response.content)
+    print(f"Successfully connected to IMS data.")
 except Exception as e:
-    print(f"JSON Fetch Error: {e}")
+    print(f"Connection Error: {e}")
     exit(1)
 
-# 3. יצירת המפה
+# 3. יצירת מפה
 m = folium.Map(location=[32.0, 34.8], zoom_start=8)
 found_count = 0
 
-for stn in stations_data:
+for station in root.findall('.//Observation'):
     try:
-        # ב-JSON הזה הנתונים נמצאים במבנה שונה
-        sid = int(stn.get('stn_num'))
-        temp = stn.get('td') # טמפרטורה רגעית מדויקת
+        sid_el = station.find('stn_num')
+        td_el = station.find('TD')
         
-        if temp is None: continue
-
-        # הצלבה עם האקסל המקצועי שלך
-        row = df_meta[df_meta['stn_num'] == sid]
-        
-        if not row.empty:
-            lat, lon = float(row.iloc[0]['lat']), float(row.iloc[0]['lon'])
-            name = row.iloc[0]['stn_name']
+        if sid_el is not None and td_el is not None:
+            sid = int(sid_el.text)
+            temp = td_el.text.strip()
             
-            folium.Marker(
-                [lat, lon],
-                icon=folium.DivIcon(html=f"""
-                    <div style="background:white; border:2px solid #2980b9; border-radius:4px; 
-                    padding:2px; width:35px; text-align:center; font-size:12px; font-weight:bold;
-                    box-shadow: 1px 1px 3px rgba(0,0,0,0.4); color: #2c3e50;">{temp}</div>
-                """),
-                popup=f"<b>{name}</b><br>טמפרטורה: {temp}°C"
-            ).add_to(m)
-            found_count += 1
+            row = df_meta[df_meta['stn_num'] == sid]
+            if not row.empty:
+                lat, lon = float(row.iloc[0]['lat']), float(row.iloc[0]['lon'])
+                name = row.iloc[0]['stn_name']
+                
+                folium.Marker(
+                    [lat, lon],
+                    icon=folium.DivIcon(html=f"""
+                        <div style="background:white; border:2px solid #2980b9; border-radius:4px; 
+                        padding:2px; width:35px; text-align:center; font-size:12px; font-weight:bold;
+                        box-shadow: 1px 1px 3px rgba(0,0,0,0.4);">{temp}</div>
+                    """),
+                    popup=f"<b>{name}</b><br>טמפרטורה: {temp}°C"
+                ).add_to(m)
+                found_count += 1
     except:
         continue
 
-print(f"Update finished! Added {found_count} real-time stations.")
+print(f"Success! Added {found_count} stations.")
 m.save("index.html")
