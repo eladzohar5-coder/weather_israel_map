@@ -1,0 +1,26 @@
+name: Map Bot
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+jobs:
+  run_bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.9'
+      - name: Install dependencies
+        run: pip install pandas openpyxl folium requests
+      - name: Run update script
+        run: python update_map.py
+      - name: Commit and push changes
+        run: |
+          git config --global user.name "Bot"
+          git config --global user.email "bot@bot.com"
+          git add index.html
+          git commit -m "update" || exit 0
+          git push
