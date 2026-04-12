@@ -3,6 +3,7 @@ import folium
 import requests
 import xml.etree.ElementTree as ET
 
+# 1. פונקציית טעינת אקסל נשארת זהה
 def load_excel_smart(filename):
     try:
         df = pd.read_excel(filename, header=None)
@@ -15,57 +16,59 @@ def load_excel_smart(filename):
         df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
         df = df.dropna(how='all', axis=1).dropna(how='all', axis=0)
         return df
-    except Exception as e:
-        print(f"Excel error: {e}")
-        return None
+    except: return None
 
-# 1. טעינת אקסל
 df_meta = load_excel_smart('stations_metadata.xlsx')
 
-# 2. משיכת נתונים מכתובת ה-XML הכי אמינה ופתוחה
+# 2. משיכת הקובץ
 url = "https://ims.gov.il/sites/default/files/ims_data/xml_files/imslasthour.xml"
-
 try:
-    # אנחנו משתמשים ב-Session כדי לשמור על חיבור יציב
-    session = requests.Session()
-    session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
-    response = session.get(url, timeout=20)
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    response = requests.get(url, headers=headers, timeout=20)
     root = ET.fromstring(response.content)
-    print(f"Successfully connected to IMS data.")
 except Exception as e:
-    print(f"Connection Error: {e}")
+    print(f"Error: {e}")
     exit(1)
 
-# 3. יצירת מפה
+# 3. מנגנון בחירת הנתון העדכני ביותר לכל תחנה
+latest_data = {} # כאן נשמור רק את השורה הכי חדשה לכל ID
+
+for obs in root.findall('.//Observation'):
+    try:
+        sid = int(obs.find('stn_num').text)
+        time_str = obs.find('time_obs').text # למשל 2026-04-12T15:50:00
+        temp = obs.find('TD').text
+        
+        if temp is None or temp == "": continue
+        
+        # אם התחנה עוד לא קיימת במילון, או שהזמן הנוכחי חדש יותר ממה ששמרנו
+        if sid not in latest_data or time_str > latest_data[sid]['time']:
+            latest_data[sid] = {
+                'temp': temp,
+                'time': time_str
+            }
+    except: continue
+
+# 4. יצירת המפה עם הנתונים המנופים
 m = folium.Map(location=[32.0, 34.8], zoom_start=8)
 found_count = 0
 
-for station in root.findall('.//Observation'):
-    try:
-        sid_el = station.find('stn_num')
-        td_el = station.find('TD')
+for sid, info in latest_data.items():
+    row = df_meta[df_meta['stn_num'] == sid]
+    if not row.empty:
+        lat, lon = float(row.iloc[0]['lat']), float(row.iloc[0]['lon'])
+        name = row.iloc[0]['stn_name']
         
-        if sid_el is not None and td_el is not None:
-            sid = int(sid_el.text)
-            temp = td_el.text.strip()
-            
-            row = df_meta[df_meta['stn_num'] == sid]
-            if not row.empty:
-                lat, lon = float(row.iloc[0]['lat']), float(row.iloc[0]['lon'])
-                name = row.iloc[0]['stn_name']
-                
-                folium.Marker(
-                    [lat, lon],
-                    icon=folium.DivIcon(html=f"""
-                        <div style="background:white; border:2px solid #2980b9; border-radius:4px; 
-                        padding:2px; width:35px; text-align:center; font-size:12px; font-weight:bold;
-                        box-shadow: 1px 1px 3px rgba(0,0,0,0.4);">{temp}</div>
-                    """),
-                    popup=f"<b>{name}</b><br>טמפרטורה: {temp}°C"
-                ).add_to(m)
-                found_count += 1
-    except:
-        continue
+        folium.Marker(
+            [lat, lon],
+            icon=folium.DivIcon(html=f"""
+                <div style="background:white; border:2px solid #2c3e50; border-radius:4px; 
+                padding:2px; width:35px; text-align:center; font-size:12px; font-weight:bold;
+                box-shadow: 1px 1px 3px rgba(0,0,0,0.4);">{info['temp']}</div>
+            """),
+            popup=f"<b>{name}</b><br>טמפרטורה: {info['temp']}°C<br>זמן (UTC): {info['time']}"
+        ).add_to(m)
+        found_count += 1
 
-print(f"Success! Added {found_count} stations.")
+print(f"Cleaned up! Showing {found_count} most recent observations.")
 m.save("index.html")
